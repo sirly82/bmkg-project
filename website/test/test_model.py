@@ -10,8 +10,8 @@ WEBSITE_DIR = Path(__file__).resolve().parents[1]
 
 sys.path.insert(0, str(WEBSITE_DIR))
 
-from weather_service import get_six_hour_data
-from model_utils import predict_phenomenon
+from modules.weather_service import get_hours_data
+from modules.model_utils import predict_phenomenon
 
 # ============================================================
 # 2. MENGAMBIL DATA DARI DATABASE
@@ -25,7 +25,7 @@ selected_wib = "2025-01-01 07:00:00+07:00"
 
 print("\nMengambil data observasi dari database...")
 
-df = get_six_hour_data(selected_wib)
+df = get_hours_data(selected_wib)
 
 if df.empty:
     raise ValueError(

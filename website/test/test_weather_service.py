@@ -1,11 +1,11 @@
 import sys
 from pathlib import Path
 
-PROJECT_DIR = Path(__file__).resolve().parent.parent
+PROJECT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_DIR))
 
 import pandas as pd
-from weather_service import get_six_hour_data
+from modules.weather_service import get_hours_data
 
 selected_wib = pd.Timestamp(
     "2025-01-01 07:00:00",
@@ -21,7 +21,7 @@ print("=" * 60)
 print("PENGUJIAN PERTAMA")
 print("=" * 60)
 
-df_first = get_six_hour_data(selected_wib)
+df_first = get_hours_data(selected_wib)
 
 print("\nHasil pengujian pertama:")
 print(
@@ -39,7 +39,7 @@ print("\n" + "=" * 60)
 print("PENGUJIAN KEDUA")
 print("=" * 60)
 
-df_second = get_six_hour_data(selected_wib)
+df_second = get_hours_data(selected_wib)
 
 print("\nHasil pengujian kedua:")
 print(

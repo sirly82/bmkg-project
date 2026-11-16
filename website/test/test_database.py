@@ -1,19 +1,19 @@
 import sys
 from pathlib import Path
 
-PROJECT_DIR = Path(__file__).resolve().parent.parent
+PROJECT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_DIR))
 
 import pandas as pd
 
-from database import (
+from modules.database import (
     init_db,
     save_reports,
     get_reports,
     count_reports,
     get_cached_timestamps,
 )
-from synop_utils import scrape_synop_range
+from modules.synop_utils import scrape_synop_range
 
 # ============================================================
 # 1. WAKTU PENGUJIAN
