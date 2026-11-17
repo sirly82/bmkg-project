@@ -10,7 +10,7 @@ from components.style import apply_custom_style
 # 1. KONFIGURASI HALAMAN
 # ============================================================
 st.set_page_config(
-    page_title="Visibility Monitoring - BMKG Jambi",
+    page_title="Weather Monitoring - BMKG Jambi",
     page_icon="🌦️",
     layout="wide"
 )
@@ -39,9 +39,9 @@ TIMEZONES = {
 st.markdown(
     """
     <div class="main-header">
-        <h1>🌦️ Visibility Monitoring</h1>
+        <h1>🌦️ Weather Monitoring</h1>
         <p>
-            Sistem monitoring dan klasifikasi fenomena visibility
+            Sistem Monitoring dan Klasifikasi Fenomena Cuaca
             berdasarkan data observasi SYNOP
             Stasiun Meteorologi Sultan Thaha Jambi.
         </p>
@@ -186,7 +186,7 @@ st.divider()
 st.markdown(
     """
     <div class="custom-footer">
-        Prototype Monitoring dan Klasifikasi Fenomena Visibility
+        Prototype Monitoring dan Klasifikasi Fenomena Cuaca
         <br>
         Stasiun Meteorologi Kelas I Sultan Thaha Jambi
     </div>
