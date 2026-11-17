@@ -56,7 +56,7 @@ st.markdown(
 )
 
 # ============================================================
-# 4. INPUT TANGGAL DAN WAKTU
+# 4. INPUT TANGGAL DAN WAKTU (preview langsung berubah)
 # ============================================================
 with st.container(border=True, key="time_settings"):
     st.subheader("🕒 Pengaturan Waktu Observasi")
@@ -69,78 +69,72 @@ with st.container(border=True, key="time_settings"):
         key="timezone_label"
     )
     selected_tz = ZoneInfo(TIMEZONES[selected_timezone_label])
-
-    time_method = st.radio(
-        "Cara menentukan waktu",
-        ["Waktu sekarang", "Pilih manual"],
-        horizontal=True
-    )
     now = datetime.now(selected_tz)
 
-    if time_method == "Waktu sekarang":
-        st.caption(
-            f"Sekarang: {now.strftime('%d-%m-%Y %H:%M')} "
-            "(dibulatkan ke jam penuh)"
+    use_now = st.checkbox("Gunakan jam sekarang", key="use_now")
+
+    # Rapikan nilai tersimpan supaya tidak melewati batas
+    today = now.date()
+    stored_date = st.session_state.get("manual_date")
+    if stored_date is not None and stored_date > today:
+        st.session_state["manual_date"] = today
+
+    col_date, col_time = st.columns(2)
+    with col_date:
+        selected_date = st.date_input(
+            "Tanggal observasi",
+            value=today,
+            max_value=today,
+            key="manual_date",
+            disabled=use_now
         )
-        if st.button("Gunakan jam sekarang", width="stretch"):
-            st.session_state["selected_datetime"] = now.replace(
-                minute=0,
-                second=0,
-                microsecond=0
-            ).isoformat()
+
+    # Jam yang boleh dipilih: sampai jam sekarang jika tanggalnya hari ini.
+    max_hour = now.hour if selected_date == today else 23
+    hour_options = list(range(max_hour + 1))
+
+    stored_hour = st.session_state.get("manual_hour")
+    if stored_hour is not None and stored_hour not in hour_options:
+        st.session_state["manual_hour"] = max_hour
+
+    with col_time:
+        selected_hour = st.selectbox(
+            "Jam observasi",
+            options=hour_options,
+            index=len(hour_options) - 1,
+            format_func=lambda x: f"{x:02d}:00",
+            key="manual_hour",
+            disabled=use_now
+        )
+
+    # Waktu dihitung langsung dari input saat ini, tanpa tombol perantara.
+    if use_now:
+        candidate_datetime = now.replace(minute=0, second=0, microsecond=0)
     else:
-        col_date, col_time = st.columns(2)
+        candidate_datetime = datetime.combine(
+            selected_date,
+            time(selected_hour, 0)
+        ).replace(tzinfo=selected_tz)
 
-        with col_date:
-            selected_date = st.date_input(
-                "Tanggal observasi",
-                value=now.date(),
-                max_value=now.date(),
-                key="manual_date"
-            )
-        with col_time:
-            selected_hour = st.selectbox(
-                "Jam observasi",
-                options=list(range(24)),
-                index=now.hour,
-                format_func=lambda x: f"{x:02d}:00",
-                key="manual_hour"
-            )
+    is_future = candidate_datetime > now
 
-        if st.button("Gunakan waktu ini", width="stretch"):
-            candidate_datetime = datetime.combine(
-                selected_date,
-                time(selected_hour, 0)
-            ).replace(tzinfo=selected_tz)
+    st.markdown("#### Waktu observasi terpilih")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("Tanggal", candidate_datetime.strftime("%d-%m-%Y"))
+    with col2:
+        st.metric("Jam", candidate_datetime.strftime("%H:%M"))
+    st.caption(f"Zona waktu: {selected_timezone_label}")
 
-            if candidate_datetime > now:
-                st.error("Waktu observasi tidak boleh melebihi waktu saat ini.")
-            else:
-                st.session_state["selected_datetime"] = candidate_datetime.isoformat()
+    if is_future:
+        st.error("Waktu observasi tidak boleh melebihi waktu saat ini.")
 
-    # Ambil waktu yang telah disimpan.
-    selected_datetime = None
-    if st.session_state.get("selected_datetime"):
-        selected_datetime = datetime.fromisoformat(
-            st.session_state["selected_datetime"]
-        ).astimezone(selected_tz)
-
-        st.markdown("#### Waktu observasi terpilih")
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.metric("Tanggal", selected_datetime.strftime("%d-%m-%Y"))
-        with col2:
-            st.metric("Jam", selected_datetime.strftime("%H:%M"))
-
-        st.caption(f"Zona waktu: {selected_timezone_label}")
-    else:
-        st.info("Tentukan waktu observasi terlebih dahulu.")
+selected_datetime = None if is_future else candidate_datetime
 
 # ============================================================
 # 5. TOMBOL PENGAMBILAN DATA DAN PREDIKSI
 # ============================================================
-st.write("")  # jarak antar kartu dan tombol
+st.write("")
 load_data = st.button(
     "🌦️ Tampilkan Data dan Hasil",
     type="primary",
@@ -159,7 +153,6 @@ if load_data and selected_datetime is not None:
                 selected_timezone=TIMEZONES[selected_timezone_label]
             )
 
-        # Simpan hasil agar tetap tersedia saat Streamlit rerun.
         st.session_state["weather_df"] = result_df
         st.session_state["result_selected_datetime"] = selected_datetime.isoformat()
         st.session_state["result_timezone_label"] = selected_timezone_label

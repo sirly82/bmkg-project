@@ -7,11 +7,33 @@ import altair as alt
 
 CHART_COLOR = "#1F6F78"
 
+def wrap_text(text):
+    """Beri titik putus baris setelah '/' agar teks panjang turun baris rapi."""
+    return str(text).replace("/", "/\u200b")
+
 def format_value(value, suffix=""):
     """Mengubah nilai menjadi teks yang mudah dibaca."""
     if pd.isna(value):
         return "-"
     return f"{value}{suffix}"
+
+def format_oktas(value):
+    """Tutupan awan dalam okta; kode 9 = langit tidak terlihat."""
+    if pd.isna(value):
+        return "-"
+    try:
+        okta = int(float(value))
+    except (TypeError, ValueError):
+        return str(value)
+    if okta == 9:
+        return "9 (langit tak terlihat)"
+    return f"{okta} okta"
+
+def format_km(value):
+    """Visibility dalam km: 4.0 -> '4 km', 0.5 -> '0,5 km'."""
+    if pd.isna(value):
+        return "-"
+    return f"{float(value):g} km".replace(".", ",")
 
 def get_observed_phenomenon(row):
     """
@@ -87,14 +109,14 @@ def _display_main_prediction(selected_data):
 
     with st.container(border=True, key="prediction_summary"):
         # Kolom ketiga dibuat lebih lebar karena teks fenomena aktual panjang.
-        col1, col2, col3 = st.columns([1, 1, 1.4])
+        col1, col2, col3 = st.columns([1.3, 0.9, 1.3])
 
         with col1:
-            st.metric("🌫️ Fenomena Prediksi", predicted_class)
+            st.metric("🌫️ Fenomena Prediksi", wrap_text(predicted_class))
         with col2:
             st.metric("🎯 Tingkat Kepercayaan", f"{confidence:.2%}")
         with col3:
-            st.metric("📋 Fenomena Aktual (WW)", observed)
+            st.metric("📋 Fenomena Aktual (WW)", wrap_text(observed))
 
         if observed == "Tidak tersedia":
             st.info(
@@ -153,7 +175,7 @@ def _display_meteorological_parameters(selected_data):
             st.markdown("**👁️ Jarak Pandang**")
             st.metric(
                 "Visibility (VV)",
-                format_value(selected_data.get("visibility_vv"))
+                format_km(selected_data.get("visibility_vv"))
             )
 
     with row1_right:
@@ -201,7 +223,7 @@ def _display_meteorological_parameters(selected_data):
             with c2:
                 st.metric(
                     "Kecepatan Angin",
-                    format_value(selected_data.get("wind_speed_ff"))
+                    format_value(selected_data.get("wind_speed_ff"), " knot")
                 )
             with c3:
                 st.metric(
@@ -219,12 +241,12 @@ def _display_meteorological_parameters(selected_data):
             with c1:
                 st.metric(
                     "Awan Rendah",
-                    format_value(selected_data.get("cloud_low_cover_1"))
+                    format_oktas(selected_data.get("cloud_low_cover_1"))
                 )
             with c2:
                 st.metric(
                     "Awan Total",
-                    format_value(selected_data.get("cloud_cover_oktas_m"))
+                    format_oktas(selected_data.get("cloud_cover_oktas_m"))
                 )
 
 def _build_timeline(phenomenon_df, selected_tz):
@@ -354,12 +376,12 @@ def _display_visibility_chart(df, selected_utc, selected_tz, selected_duration):
             ),
             y=alt.Y(
                 "visibility_vv:Q",
-                title="Nilai Visibility (VV)",
+                title="Visibility (km)",
                 scale=alt.Scale(domain=y_domain, nice=False, zero=False)
             ),
             tooltip=[
                 alt.Tooltip("Waktu:T", title="Waktu", format="%d-%m-%Y %H:%M"),
-                alt.Tooltip("visibility_vv:Q", title="VV"),
+                alt.Tooltip("visibility_vv:Q", title="Visibility (km)"),
             ]
         )
         .properties(height=300)
@@ -369,8 +391,7 @@ def _display_visibility_chart(df, selected_utc, selected_tz, selected_duration):
         st.markdown("**Grafik Historis Visibility**")
         st.altair_chart(chart, width="stretch")
         st.caption(
-            "Nilai VV merupakan hasil decoding kode SYNOP "
-            "dan tidak otomatis menunjukkan jarak dalam meter."
+            "Nilai visibility dalam kilometer, hasil decoding kode VV SYNOP."
         )
 
 def display_results(

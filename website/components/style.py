@@ -298,7 +298,20 @@ def apply_custom_style():
             min-height: 190px;
         }}
 
-        /* Teks fenomena di kartu prediksi lebih kecil agar tidak terlalu besar */
+        /* Nilai metric yang panjang turun baris, tidak dipotong "..." */
+        [data-testid="stMetricValue"],
+        [data-testid="stMetricValue"] div,
+        [data-testid="stMetricLabel"],
+        [data-testid="stMetricLabel"] div,
+        [data-testid="stMetricLabel"] p {{
+            white-space: normal !important;
+            overflow: visible !important;
+            text-overflow: clip !important;
+            overflow-wrap: anywhere;
+            line-height: 1.25;
+        }}
+
+        /* Teks fenomena di kartu prediksi sedikit lebih kecil */
         .st-key-prediction_summary [data-testid="stMetricValue"] {{
             font-size: 1.35rem;
         }}
