@@ -57,14 +57,8 @@ def get_observed_phenomenon(row):
     if ix_flag in [3, 6]:
         return "Tidak tersedia"
 
-    if pd.notna(weather_code_ww):
-        phenomenon = row.get("phenomenon")
-        if pd.notna(phenomenon):
-            return phenomenon
-
-    # Pertahankan hasil decoding dari scraper bila tersedia.
     phenomenon = row.get("phenomenon")
-    if pd.notna(phenomenon):
+    if pd.notna(phenomenon) and str(phenomenon).strip() not in ("", "Unknown"):
         return phenomenon
 
     return "Tidak tersedia"
@@ -84,16 +78,36 @@ COMPARISON_ICON = {
     "Tidak dapat dibandingkan": "➖ Tidak dapat dibandingkan",
 }
 
-def _display_main_prediction(selected_data):
+def _display_main_prediction(selected_data, fallback_info=None):
     st.divider()
     st.subheader("🎯 Hasil Prediksi")
 
     if selected_data is None:
-        st.warning(
-            "Laporan observasi pada jam yang dipilih tidak ditemukan. "
-            "Riwayat data yang tersedia tetap dapat ditampilkan."
-        )
+        if fallback_info and fallback_info.get("latest_local") is not None:
+            latest_str = fallback_info["latest_local"].strftime("%d-%m-%Y %H:%M")
+            target_str = fallback_info["target_local"].strftime("%H:%M")
+            st.warning(
+                f"Laporan observasi pada pukul **{target_str}** belum tersedia di Ogimet. "
+                f"Laporan terakhir yang tercatat adalah **{latest_str}** "
+                "(lebih dari 3 jam lalu), sehingga prediksi utama tidak ditampilkan. "
+                "Riwayat data yang tersedia tetap dapat dilihat di bawah."
+            )
+        else:
+            st.warning(
+                "Laporan observasi pada jam yang dipilih tidak ditemukan. "
+                "Riwayat data yang tersedia tetap dapat ditampilkan."
+            )
         return
+
+    if fallback_info and fallback_info.get("used_fallback"):
+        target_str = fallback_info["target_local"].strftime("%H:%M")
+        actual_str = fallback_info["actual_local"].strftime("%d-%m-%Y %H:%M")
+        gap_hours = fallback_info["gap_hours"]
+        st.info(
+            f"ℹ️ Laporan pukul **{target_str}** belum masuk ke Ogimet. "
+            f"Menampilkan data dan prediksi dari laporan terakhir yang tersedia "
+            f"pada **{actual_str}** (selisih {gap_hours} jam)."
+        )
 
     result = selected_data["prediction_result"]
 
@@ -108,7 +122,6 @@ def _display_main_prediction(selected_data):
     observed = get_observed_phenomenon(selected_data)
 
     with st.container(border=True, key="prediction_summary"):
-        # Kolom ketiga dibuat lebih lebar karena teks fenomena aktual panjang.
         col1, col2, col3 = st.columns([1.3, 0.9, 1.3])
 
         with col1:
@@ -394,6 +407,53 @@ def _display_visibility_chart(df, selected_utc, selected_tz, selected_duration):
             "Nilai visibility dalam kilometer, hasil decoding kode VV SYNOP."
         )
 
+def _display_raw_and_export(df, selected_data, selected_utc, selected_tz):
+    st.divider()
+    with st.expander("🔍 Detail Sandi SYNOP Mentah & Ekspor Data"):
+        if selected_data is not None:
+            obs_utc = pd.Timestamp(selected_data["data_timestamp"])
+            obs_local = obs_utc.tz_convert(selected_tz)
+            ww_val = selected_data.get("weather_code_ww")
+            ix_val = selected_data.get("ix_flag")
+
+            st.markdown(
+                f"**Waktu Observasi:** `{obs_local.strftime('%d-%m-%Y %H:%M')}` "
+                f"(`{obs_utc.strftime('%H:%M UTC')}`) | "
+                f"**Kode WW:** `{ww_val if pd.notna(ww_val) else '-'}` | "
+                f"**Indikator ix:** `{ix_val if pd.notna(ix_val) else '-'}`"
+            )
+
+            raw_synop = selected_data.get("raw_synop")
+            if pd.notna(raw_synop):
+                st.code(str(raw_synop), language="text")
+            else:
+                st.info("Sandi SYNOP mentah tidak tersedia.")
+        else:
+            st.info("Tidak ada sandi SYNOP terpilih pada jam observasi ini.")
+
+        # Ratakan kolom prediction_result agar hasil unduhan CSV rapi
+        export_df = df.copy()
+        if "prediction_result" in export_df.columns:
+            export_df["predicted_phenomenon"] = export_df["prediction_result"].apply(
+                lambda r: r.get("predicted_class") if isinstance(r, dict) else None
+            )
+            export_df["prediction_confidence"] = export_df["prediction_result"].apply(
+                lambda r: r.get("confidence") if isinstance(r, dict) else None
+            )
+            export_df = export_df.drop(columns=["prediction_result"])
+
+        export_df["data_timestamp"] = export_df["data_timestamp"].dt.strftime(
+            "%Y-%m-%d %H:%M:%S UTC"
+        )
+
+        csv_bytes = export_df.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            label="⬇️ Unduh Data Observasi & Prediksi 24 Jam (CSV)",
+            data=csv_bytes,
+            file_name=f"synop_96195_{selected_utc.strftime('%Y%m%d_%H%M')}UTC.csv",
+            mime="text/csv",
+        )
+
 def display_results(
     df,
     selected_datetime_iso,
@@ -410,19 +470,22 @@ def display_results(
         return
 
     selected_tz = ZoneInfo(timezones[selected_timezone_label])
-    selected_datetime = datetime.fromisoformat(
-        selected_datetime_iso
-    ).astimezone(selected_tz)
-    selected_utc = selected_datetime.astimezone(timezone.utc)
+    ts_local = pd.Timestamp(selected_datetime_iso)
+    if ts_local.tzinfo is None:
+        ts_local = ts_local.tz_localize(selected_tz)
+    else:
+        ts_local = ts_local.tz_convert(selected_tz)
+
+    target_local = ts_local.floor("h")
+    selected_utc = target_local.tz_convert("UTC")
 
     df = df.copy()
     df["data_timestamp"] = pd.to_datetime(
         df["data_timestamp"],
         utc=True
     )
+    df = df.sort_values("data_timestamp").reset_index(drop=True)
 
-    # Divider pembuka sengaja dihapus: app.py sudah memberi divider
-    # sebelum display_results() dipanggil.
     st.subheader("⚙️ Pengaturan Tampilan")
 
     with st.container(border=True, key="display_settings"):
@@ -438,17 +501,40 @@ def display_results(
                 key="selected_duration"
             )
 
-    # Data pada satu jam yang dipilih user.
-    selected_row = df[
-        df["data_timestamp"] == pd.Timestamp(selected_utc)
+    # Cari laporan yang sesuai jam pilihan; jika belum rilis, fallback maksimal 3 jam ke belakang.
+    available_up_to_target = df[df["data_timestamp"] <= selected_utc]
+    selected_row = available_up_to_target[
+        available_up_to_target["data_timestamp"] == selected_utc
     ]
 
-    if selected_row.empty:
-        selected_data = None
-    else:
-        selected_data = selected_row.iloc[0]
+    fallback_info = None
 
-    _display_main_prediction(selected_data)
+    if not selected_row.empty:
+        selected_data = selected_row.iloc[0]
+    elif not available_up_to_target.empty:
+        latest_row = available_up_to_target.iloc[-1]
+        gap = selected_utc - latest_row["data_timestamp"]
+        latest_local = latest_row["data_timestamp"].tz_convert(selected_tz)
+
+        if gap <= pd.Timedelta(hours=3):
+            selected_data = latest_row
+            fallback_info = {
+                "used_fallback": True,
+                "target_local": target_local,
+                "actual_local": latest_local,
+                "gap_hours": int(gap.total_seconds() // 3600),
+            }
+        else:
+            selected_data = None
+            fallback_info = {
+                "used_fallback": False,
+                "target_local": target_local,
+                "latest_local": latest_local,
+            }
+    else:
+        selected_data = None
+
+    _display_main_prediction(selected_data, fallback_info=fallback_info)
     _display_meteorological_parameters(selected_data)
     _display_timeline(
         df=df,
@@ -461,4 +547,10 @@ def display_results(
         selected_utc=selected_utc,
         selected_tz=selected_tz,
         selected_duration=selected_duration
+    )
+    _display_raw_and_export(
+        df=df,
+        selected_data=selected_data,
+        selected_utc=selected_utc,
+        selected_tz=selected_tz
     )

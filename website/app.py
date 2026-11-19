@@ -1,4 +1,12 @@
+import sys
+from pathlib import Path
+
+WEBSITE_DIR = Path(__file__).resolve().parent
+if str(WEBSITE_DIR) not in sys.path:
+    sys.path.insert(0, str(WEBSITE_DIR))
+
 import streamlit as st
+
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
@@ -48,7 +56,7 @@ st.markdown(
         <div class="chips">
             <span class="chip">Data SYNOP</span>
             <span class="chip">Riwayat 24 jam</span>
-            <span class="chip">Decision Tree</span>
+            <span class="chip">Random Forest</span>
         </div>
     </div>
     """,
@@ -75,15 +83,13 @@ with st.container(border=True, key="time_settings"):
 
     # Rapikan nilai tersimpan supaya tidak melewati batas
     today = now.date()
-    stored_date = st.session_state.get("manual_date")
-    if stored_date is not None and stored_date > today:
+    if "manual_date" not in st.session_state or st.session_state["manual_date"] > today:
         st.session_state["manual_date"] = today
 
     col_date, col_time = st.columns(2)
     with col_date:
         selected_date = st.date_input(
             "Tanggal observasi",
-            value=today,
             max_value=today,
             key="manual_date",
             disabled=use_now
@@ -93,15 +99,13 @@ with st.container(border=True, key="time_settings"):
     max_hour = now.hour if selected_date == today else 23
     hour_options = list(range(max_hour + 1))
 
-    stored_hour = st.session_state.get("manual_hour")
-    if stored_hour is not None and stored_hour not in hour_options:
+    if "manual_hour" not in st.session_state or st.session_state["manual_hour"] not in hour_options:
         st.session_state["manual_hour"] = max_hour
 
     with col_time:
         selected_hour = st.selectbox(
             "Jam observasi",
             options=hour_options,
-            index=len(hour_options) - 1,
             format_func=lambda x: f"{x:02d}:00",
             key="manual_hour",
             disabled=use_now
@@ -135,6 +139,13 @@ selected_datetime = None if is_future else candidate_datetime
 # 5. TOMBOL PENGAMBILAN DATA DAN PREDIKSI
 # ============================================================
 st.write("")
+
+force_refresh = st.checkbox(
+    "Paksa ambil ulang data terbaru dari Ogimet (abaikan cache)",
+    value=False,
+    key="force_refresh",
+)
+
 load_data = st.button(
     "🌦️ Tampilkan Data dan Hasil",
     type="primary",
@@ -150,7 +161,8 @@ if load_data and selected_datetime is not None:
         with st.spinner("Mengambil data 24 jam dan menjalankan prediksi..."):
             result_df = fetch_and_predict(
                 selected_datetime=selected_datetime,
-                selected_timezone=TIMEZONES[selected_timezone_label]
+                selected_timezone=TIMEZONES[selected_timezone_label],
+                force_refresh=force_refresh,
             )
 
         st.session_state["weather_df"] = result_df
