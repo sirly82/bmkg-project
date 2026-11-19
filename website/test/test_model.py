@@ -1,13 +1,10 @@
 import sys
 from pathlib import Path
 
-import pandas as pd
-
 # ============================================================
 # 1. MENYIAPKAN IMPORT
 # ============================================================
 WEBSITE_DIR = Path(__file__).resolve().parents[1]
-
 sys.path.insert(0, str(WEBSITE_DIR))
 
 from modules.weather_service import get_hours_data
