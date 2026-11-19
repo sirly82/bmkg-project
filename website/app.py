@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 from components.data_handler import fetch_and_predict
 from components.display_handler import display_results
 from components.style import apply_custom_style
+from modules.database import DB_PATH, count_reports, get_recent_observations
 
 # ============================================================
 # 1. KONFIGURASI HALAMAN
@@ -190,6 +191,34 @@ else:
         "Hasil belum tersedia. Pilih tanggal dan jam, "
         "lalu klik Tampilkan Data dan Hasil."
     )
+
+with st.expander("🗄️ Inspeksi Database Lokal (SQLite)"):
+    if DB_PATH.exists():
+        total_rows = count_reports()
+        st.caption(
+            f"Lokasi file: `{DB_PATH.name}` | "
+            f"Total data tersimpan: **{total_rows} baris**"
+        )
+
+        recent_df = get_recent_observations(limit=25)
+        if not recent_df.empty:
+            st.dataframe(
+                recent_df,
+                width="stretch",
+                hide_index=True,
+                height=300,
+            )
+        else:
+            st.info("Tabel observasi masih kosong.")
+
+        st.download_button(
+            label="⬇️ Unduh File Database (weather.db)",
+            data=DB_PATH.read_bytes(),
+            file_name="weather.db",
+            mime="application/octet-stream",
+        )
+    else:
+        st.info("File database belum terbentuk. Lakukan pengambilan data terlebih dahulu.")
 
 # ============================================================
 # 7. FOOTER

@@ -336,3 +336,18 @@ def mark_hours_checked(timestamps):
 
     with get_connection() as conn:
         conn.executemany(query, records)
+
+def get_recent_observations(limit=25):
+    """
+    Mengambil N data observasi terbaru dari SQLite untuk pratinjau database.
+    """
+    query = f"""
+        SELECT {", ".join(COLUMNS)}
+        FROM {TABLE_NAME}
+        ORDER BY data_timestamp DESC
+        LIMIT ?
+    """
+    with get_connection() as conn:
+        df = pd.read_sql_query(query, conn, params=(limit,))
+
+    return df
