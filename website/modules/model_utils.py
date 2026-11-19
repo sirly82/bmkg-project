@@ -12,9 +12,8 @@ BASE_DIR = Path(__file__).resolve().parents[2]
 
 MODEL_PATH = (
     BASE_DIR
-    / "notebooks"
     / "model"
-    / "visibility_rf_model.joblib"
+    / "weather_phenomena_rf_model.joblib"
 )
 
 # ============================================================
@@ -24,7 +23,7 @@ MODEL_PATH = (
 def load_model():
     """
     Memuat model Random Forest beserta metadata
-    dari file visibility_rf_model.pkl.
+    dari file weather_phenomena_rf_model.joblib.
     """
 
     if not MODEL_PATH.exists():

@@ -344,7 +344,7 @@ def get_recent_observations(limit=25):
     query = f"""
         SELECT {", ".join(COLUMNS)}
         FROM {TABLE_NAME}
-        ORDER BY data_timestamp DESC
+        ORDER BY rowid DESC
         LIMIT ?
     """
     with get_connection() as conn:

@@ -1,7 +1,7 @@
 import joblib
 from pathlib import Path
 
-MODEL_PATH = Path("model/visibility_rf_model.pkl")
+MODEL_PATH = Path("model/weather_phenomena_rf_model.joblib")
 
 print("Memuat model...")
 model_data = joblib.load(MODEL_PATH)
