@@ -4,8 +4,8 @@ import re
 import time
 import urllib.parse
 import urllib.request
-
 import pandas as pd
+
 from html.parser import HTMLParser
 
 # ============================================================
@@ -20,7 +20,7 @@ USER_AGENT = (
     "Chrome/128.0.0.0 Safari/537.36"
 )
 MAX_RETRIES = 3
-RETRY_DELAY = 20
+RETRY_DELAY = 5
 INT_COLS = [
     "wind_dir_deg_dd",
     "wind_speed_ff",
@@ -36,39 +36,29 @@ INT_COLS = [
 class OgimetTableParser(HTMLParser):
     def __init__(self):
         super().__init__()
-
         self.in_tr = False
         self.in_td = False
-
         self.rows = []
         self.current_row = []
         self.current_cell = []
 
     def handle_starttag(self, tag, attrs):
         tag = tag.lower()
-
         if tag == "tr":
             self.in_tr = True
             self.current_row = []
-
         elif tag in ("td", "th") and self.in_tr:
             self.in_td = True
             self.current_cell = []
 
     def handle_endtag(self, tag):
         tag = tag.lower()
-
         if tag in ("td", "th") and self.in_td:
             self.in_td = False
-
-            cell_text = " ".join(
-                "".join(self.current_cell).split()
-            )
-
+            cell_text = " ".join("".join(self.current_cell).split())
             self.current_row.append(cell_text)
         elif tag == "tr" and self.in_tr:
             self.in_tr = False
-
             if self.current_row:
                 self.rows.append(self.current_row)
 
@@ -117,7 +107,6 @@ def classify_phenomenon(ww_code, ix_flag=None):
     if pd.isna(ww_code) or str(ww_code).strip() == "":
         if pd.notna(ix_flag):
             ix = str(ix_flag).strip()
-
             if ix in {"2", "5"}:
                 return "Normal"
         return "Unknown"
@@ -125,10 +114,8 @@ def classify_phenomenon(ww_code, ix_flag=None):
     # Validasi kode WW.
     try:
         ww_value = float(str(ww_code).strip())
-
         if not math.isfinite(ww_value) or not ww_value.is_integer():
             return "Unknown"
-
         ww = int(ww_value)
     except (ValueError, TypeError):
         return "Unknown"
@@ -145,38 +132,15 @@ def classify_phenomenon(ww_code, ix_flag=None):
         return "Mist"
     elif ww in {11, 12, 28} or 40 <= ww <= 49:
         return "Fog"
-    elif (
-        14 <= ww <= 17
-        or 20 <= ww <= 27
-        or ww == 29
-        or 50 <= ww <= 99
-    ):
-        return "Precipitation/Thunderstorm"
+    elif 50 <= ww <= 99:
+        return "Active Precipitation"
+    elif 14 <= ww <= 17 or 20 <= ww <= 27 or ww == 29:
+        return "Recent/Distant Precipitation"
     else:
-        return "Other"
+        return "Other"  # Mencakup 13 (kilat jauh tanpa guntur), 18-19, 36-39
 
 # ============================================================
-# 5. PERHITUNGAN WET-BULB TEMPERATURE
-# ============================================================
-def calc_wetbulb_stull(temp_c, rh_pct):
-    if temp_c is None or rh_pct is None:
-        return None
-
-    tw = (
-        temp_c * math.atan(
-            0.151977 * math.sqrt(rh_pct + 8.313659)
-        )
-        + math.atan(temp_c + rh_pct)
-        - math.atan(rh_pct - 1.676331)
-        + 0.00391838
-        * (rh_pct ** 1.5)
-        * math.atan(0.023101 * rh_pct)
-        - 4.686035
-    )
-    return round(tw, 1)
-
-# ============================================================
-# 6. PARSING DAN DECODING SYNOP
+# 5. PARSING DAN DECODING SYNOP
 # ============================================================
 def parse_synop_row(row):
     date_match = None
@@ -186,20 +150,15 @@ def parse_synop_row(row):
         if date_match is None:
             m = re.search(
                 r"(\d{2})/(\d{2})/(\d{4})\s+(\d{2}):(\d{2})",
-                cell
+                cell,
             )
-
             if m:
                 date_match = m
 
         if idx_aaxx is None and cell.startswith("AAXX"):
             idx_aaxx = i
 
-    if (
-        date_match is None
-        or idx_aaxx is None
-        or idx_aaxx + 1 >= len(row)
-    ):
+    if date_match is None or idx_aaxx is None or idx_aaxx + 1 >= len(row):
         return None
 
     dd, mm, yyyy, hh, mi = date_match.groups()
@@ -210,14 +169,11 @@ def parse_synop_row(row):
         return None
 
     tokens = raw.replace("=", "").split()
-
     if len(tokens) < 5:
         return None
 
     header_time = tokens[1]
-    wind_unit_code = (
-        header_time[-1] if len(header_time) >= 5 else "4"
-    )
+    wind_unit_code = header_time[-1] if len(header_time) >= 5 else "4"
     is_knots = wind_unit_code in ("3", "4")
 
     grp_vis = tokens[3]   # iR ix h VV
@@ -234,7 +190,7 @@ def parse_synop_row(row):
 
     cloud_oktas = (
         int(grp_wind[0])
-        if grp_wind[0].isdigit()
+        if len(grp_wind) == 5 and grp_wind[0].isdigit()
         else None
     )
 
@@ -245,12 +201,7 @@ def parse_synop_row(row):
     else:
         wind_dir = None
 
-    wind_raw = (
-        int(grp_wind[3:5])
-        if grp_wind[3:5].isdigit()
-        else None
-    )
-
+    wind_raw = int(grp_wind[3:5]) if grp_wind[3:5].isdigit() else None
     cursor = 5
 
     if (
@@ -266,23 +217,12 @@ def parse_synop_row(row):
         cursor += 1
 
     wind_kt = (
-        int(round(
-            wind_raw if is_knots else wind_raw * 1.94384
-        ))
+        int(round(wind_raw if is_knots else wind_raw * 1.94384))
         if wind_raw is not None
         else None
     )
 
     temp_c = dewpoint_c = stn_press = mslp = ww_code = None
-
-    # Tutupan awan total dari Nddff
-    cloud_oktas = (
-        int(grp_wind[0])
-        if len(grp_wind) == 5 and grp_wind[0].isdigit()
-        else None
-    )
-
-    # Tutupan awan rendah dari grup 8NhCLCMCH
     cloud_low_1 = None
 
     for tok in tokens[cursor:]:
@@ -294,17 +234,14 @@ def parse_synop_row(row):
             cl = tok[2]
 
             if cl == "0":
-                # Tidak terdapat awan rendah
                 cloud_low_1 = 0
             elif cl.isdigit() and nh.isdigit():
-                # Awan rendah ada, gunakan nilai Nh
                 cloud_low_1 = int(nh)
             else:
                 cloud_low_1 = None
             break
 
     rain_mm = 0.0 if ir_flag == "3" else None
-
     rain_period_h = None
     rain_24h = None
 
@@ -340,13 +277,13 @@ def parse_synop_row(row):
             val = int(tok[1:5])
             stn_press = round(
                 val / 10.0 + (1000.0 if val < 5000 else 0.0),
-                1
+                1,
             )
         elif prefix == "4" and mslp is None:
             val = int(tok[1:5])
             mslp = round(
                 val / 10.0 + (1000.0 if val < 5000 else 0.0),
-                1
+                1,
             )
         elif prefix == "6" and rain_period_h is None:
             rrr = int(tok[1:4])
@@ -362,29 +299,20 @@ def parse_synop_row(row):
                 rain_mm = round((rrr - 990) * 0.1, 1)
 
             rain_period_h = period_map.get(tr)
-
             if tr == "4":
                 rain_24h = rain_mm
         elif prefix == "7" and ww_code is None:
             ww_code = tok[1:3]
 
     # Perhitungan kelembapan relatif
-    rh_exact = None
     rh_int = None
 
     if temp_c is not None and dewpoint_c is not None:
-        es = math.exp(
-            (17.625 * temp_c) / (243.04 + temp_c)
-        )
-
-        e = math.exp(
-            (17.625 * dewpoint_c) / (243.04 + dewpoint_c)
-        )
-
+        es = math.exp((17.625 * temp_c) / (243.04 + temp_c))
+        e = math.exp((17.625 * dewpoint_c) / (243.04 + dewpoint_c))
         rh_exact = 100.0 * (e / es)
         rh_int = int(round(rh_exact))
 
-    wetbulb_c = calc_wetbulb_stull(temp_c, rh_exact)
     phenomenon = classify_phenomenon(ww_code, ix_flag)
 
     return {
@@ -396,7 +324,6 @@ def parse_synop_row(row):
         "pressure_qff_mb_derived": mslp,
         "temp_drybulb_c_tttttt": temp_c,
         "temp_dewpoint_c_tdtdtd": dewpoint_c,
-        "temp_wetbulb_c": wetbulb_c,
         "relative_humidity_pc": rh_int,
         "cloud_low_cover_1": cloud_low_1,
         "cloud_cover_oktas_m": cloud_oktas,
@@ -412,15 +339,13 @@ def parse_synop_row(row):
     }
 
 # ============================================================
-# 7. MEMBUAT HTTP OPENER
+# 6. MEMBUAT HTTP OPENER
 # ============================================================
 def create_ogimet_opener():
     cookie_jar = http.cookiejar.CookieJar()
-
     opener = urllib.request.build_opener(
         urllib.request.HTTPCookieProcessor(cookie_jar)
     )
-
     opener.addheaders = [
         ("User-Agent", USER_AGENT),
         ("Referer", OGIMET_HOME),
@@ -428,13 +353,12 @@ def create_ogimet_opener():
     return opener
 
 # ============================================================
-# 8. MEMBANGUN URL SCRAPING BERDASARKAN RENTANG WAKTU
+# 7. MEMBANGUN URL SCRAPING BERDASARKAN RENTANG WAKTU
 # ============================================================
 def build_ogimet_url(start_datetime, end_datetime):
     start = pd.Timestamp(start_datetime)
     end = pd.Timestamp(end_datetime)
 
-    # Ogimet menggunakan UTC.
     if start.tzinfo is not None:
         start = start.tz_convert("UTC").tz_localize(None)
 
@@ -442,9 +366,7 @@ def build_ogimet_url(start_datetime, end_datetime):
         end = end.tz_convert("UTC").tz_localize(None)
 
     if start > end:
-        raise ValueError(
-            "Waktu awal tidak boleh lebih besar dari waktu akhir."
-        )
+        raise ValueError("Waktu awal tidak boleh lebih besar dari waktu akhir.")
 
     params = {
         "lang": "en",
@@ -454,26 +376,22 @@ def build_ogimet_url(start_datetime, end_datetime):
         "ord": "ASC",
         "nil": "NO",
         "fmt": "html",
-
         "ano": start.year,
         "mes": f"{start.month:02d}",
         "day": f"{start.day:02d}",
         "hora": f"{start.hour:02d}",
-
         "anof": end.year,
         "mesf": f"{end.month:02d}",
         "dayf": f"{end.day:02d}",
         "horaf": f"{end.hour:02d}",
-
         "send": "send",
     }
 
     query = urllib.parse.urlencode(params)
-
     return f"{OGIMET_URL}?{query}"
 
 # ============================================================
-# 9. SCRAPING DAN DECODING RENTANG WAKTU
+# 8. SCRAPING DAN DECODING RENTANG WAKTU
 # ============================================================
 def scrape_synop_range(
     start_datetime,
@@ -481,62 +399,29 @@ def scrape_synop_range(
     max_retries=MAX_RETRIES,
     retry_delay=RETRY_DELAY,
 ):
-    """
-    Mengambil data SYNOP Ogimet dalam satu rentang waktu.
-    Hasil dikembalikan sebagai DataFrame.
-    """
-    url = build_ogimet_url(
-        start_datetime,
-        end_datetime
-    )
-
+    url = build_ogimet_url(start_datetime, end_datetime)
     records = []
 
     for attempt in range(1, max_retries + 1):
-        print(
-            f"Mengambil data Ogimet "
-            f"(percobaan {attempt}/{max_retries})..."
-        )
         try:
             opener = create_ogimet_opener()
-
-            # Inisialisasi sesi Ogimet
-            opener.open(
-                OGIMET_HOME,
-                timeout=30
-            ).read()
-
-            # Satu request untuk seluruh rentang waktu
-            response = opener.open(
-                url,
-                timeout=30
-            )
-
-            html_text = response.read().decode(
-                "utf-8",
-                errors="ignore"
-            )
+            opener.open(OGIMET_HOME, timeout=30).read()
+            response = opener.open(url, timeout=30)
+            html_text = response.read().decode("utf-8", errors="ignore")
 
             parser = OgimetTableParser()
             parser.feed(html_text)
 
             records = []
-
             for row in parser.rows:
                 parsed = parse_synop_row(row)
-
                 if parsed is not None:
                     records.append(parsed)
 
             if records:
-                print(
-                    f"Berhasil membaca {len(records)} laporan."
-                )
                 break
-
-            print("Tidak ditemukan laporan SYNOP.")
         except Exception as e:
-            print(f"Gagal mengambil data: {e}")
+            print(f"Gagal mengambil data (percobaan {attempt}): {e}")
 
         if attempt < max_retries:
             time.sleep(retry_delay)
@@ -545,39 +430,26 @@ def scrape_synop_range(
         return pd.DataFrame()
 
     df = pd.DataFrame(records)
-
-    # Normalisasi timestamp
     df["data_timestamp"] = pd.to_datetime(
         df["data_timestamp"],
-        errors="coerce"
+        errors="coerce",
     )
-
     df = df.dropna(subset=["data_timestamp"])
 
-    # Deduplikasi mengikuti notebook training
     df = (
         df.sort_values("data_timestamp")
-        .drop_duplicates(
-            subset=["data_timestamp"],
-            keep="first"
-        )
+        .drop_duplicates(subset=["data_timestamp"], keep="first")
         .reset_index(drop=True)
     )
 
-    # Konversi tipe data integer
     for col in INT_COLS:
-        df[col] = pd.to_numeric(
-            df[col],
-            errors="coerce"
-        ).astype("Int64")
+        df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
 
-    # Validasi rentang waktu
     start = pd.Timestamp(start_datetime)
     end = pd.Timestamp(end_datetime)
 
     if start.tzinfo is not None:
         start = start.tz_convert("UTC").tz_localize(None)
-
     if end.tzinfo is not None:
         end = end.tz_convert("UTC").tz_localize(None)
 
@@ -586,6 +458,34 @@ def scrape_synop_range(
         & (df["data_timestamp"] <= end)
     ].reset_index(drop=True)
 
-    print(f"Total laporan unik: {len(df)}")
+    return df
+
+# ============================================================
+# 9. HELPER UNTUK ENDPOINT WEBSITE (24 JAM KE BELAKANG)
+# ============================================================
+def get_synop_last_24h(target_datetime, hours_back=24, local_tz="Asia/Jakarta"):
+    """
+    Mengambil data SYNOP dari (target_datetime - hours_back) hingga target_datetime.
+    Input target_datetime diasumsikan waktu lokal (default WIB) jika tidak punya timezone.
+    Mengembalikan DataFrame terurut dari yang paling lama ke terbaru.
+    """
+    end_local = pd.Timestamp(target_datetime)
+    if end_local.tzinfo is None:
+        end_local = end_local.tz_localize(local_tz)
+
+    end_utc = end_local.tz_convert("UTC").tz_localize(None)
+    start_utc = end_utc - pd.Timedelta(hours=hours_back)
+
+    df = scrape_synop_range(start_utc, end_utc)
+    if df.empty:
+        return df
+
+    # Tambahkan kolom waktu lokal (WIB) agar mudah ditampilkan di frontend/grafik
+    df["timestamp_local"] = (
+        df["data_timestamp"]
+        .dt.tz_localize("UTC")
+        .dt.tz_convert(local_tz)
+        .dt.tz_localize(None)
+    )
 
     return df

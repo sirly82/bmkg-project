@@ -1,12 +1,12 @@
-from pathlib import Path
 import sqlite3
-
 import pandas as pd
+
+from pathlib import Path
 
 # ============================================================
 # KONFIGURASI DATABASE
 # ============================================================
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parents[1]
 DB_DIR = BASE_DIR / "data"
 DB_PATH = DB_DIR / "weather.db"
 
@@ -25,7 +25,6 @@ CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
     pressure_qff_mb_derived REAL,
     temp_drybulb_c_tttttt REAL,
     temp_dewpoint_c_tdtdtd REAL,
-    temp_wetbulb_c REAL,
     relative_humidity_pc INTEGER,
     cloud_low_cover_1 INTEGER,
     cloud_cover_oktas_m INTEGER,
@@ -57,7 +56,6 @@ COLUMNS = [
     "pressure_qff_mb_derived",
     "temp_drybulb_c_tttttt",
     "temp_dewpoint_c_tdtdtd",
-    "temp_wetbulb_c",
     "relative_humidity_pc",
     "cloud_low_cover_1",
     "cloud_cover_oktas_m",
@@ -97,7 +95,6 @@ def save_reports(df):
 
     Jika timestamp sudah ada, data lama akan diperbarui.
     """
-
     if df is None or df.empty:
         return 0
 
@@ -171,11 +168,10 @@ def save_reports(df):
 # ============================================================
 def get_reports(start_datetime, end_datetime):
     """
-    Mengambil data dari SQLite berdasarkan rentang timestamp.
+    Mengambil data dari SQLite berdasarkan rentang timestamp UTC.
 
     Timestamp awal dan akhir bersifat inklusif.
     """
-
     start = pd.Timestamp(start_datetime)
     end = pd.Timestamp(end_datetime)
 
@@ -211,7 +207,46 @@ def get_reports(start_datetime, end_datetime):
     return df
 
 # ============================================================
-# MEMERIKSA TIMESTAMP YANG SUDAH TERSIMPAN
+# HELPER RENTANG 24 JAM (WAKTU LOKAL KE UTC)
+# ============================================================
+def get_utc_window_24h(target_datetime, hours_back=24, local_tz="Asia/Jakarta"):
+    """
+    Mengonversi waktu target lokal (default WIB) menjadi rentang (start_utc, end_utc)
+    sepanjang hours_back ke belakang.
+    """
+    end_local = pd.Timestamp(target_datetime)
+    if end_local.tzinfo is None:
+        end_local = end_local.tz_localize(local_tz)
+
+    end_utc = end_local.tz_convert("UTC").tz_localize(None)
+    start_utc = end_utc - pd.Timedelta(hours=hours_back)
+    return start_utc, end_utc
+
+
+def get_reports_last_24h(target_datetime, hours_back=24, local_tz="Asia/Jakarta"):
+    """
+    Mengambil data dari SQLite untuk 24 jam ke belakang dari waktu lokal target.
+    """
+    start_utc, end_utc = get_utc_window_24h(
+        target_datetime,
+        hours_back=hours_back,
+        local_tz=local_tz,
+    )
+    df = get_reports(start_utc, end_utc)
+
+    if not df.empty:
+        df["timestamp_local"] = (
+            df["data_timestamp"]
+            .dt.tz_localize("UTC")
+            .dt.tz_convert(local_tz)
+            .dt.tz_localize(None)
+        )
+
+    return df
+
+
+# ============================================================
+# MEMERIKSA TIMESTAMP YANG SUDAH TERSIMPAN & CACHE JAM
 # ============================================================
 def get_cached_timestamps(start_datetime, end_datetime):
     df = get_reports(start_datetime, end_datetime)
@@ -221,9 +256,7 @@ def get_cached_timestamps(start_datetime, end_datetime):
 
     return set(df["data_timestamp"])
 
-# ============================================================
-# MENGHITUNG JUMLAH DATA
-# ============================================================
+
 def count_reports():
     with get_connection() as conn:
         result = conn.execute(
@@ -236,7 +269,6 @@ def get_checked_hours(start_datetime, end_datetime):
     """
     Mengambil daftar jam yang sebelumnya sudah diperiksa ke Ogimet.
     """
-
     start = pd.Timestamp(start_datetime)
     end = pd.Timestamp(end_datetime)
 
@@ -271,7 +303,6 @@ def mark_hours_checked(timestamps):
     """
     Menandai jam-jam yang sudah berhasil diperiksa ke Ogimet.
     """
-
     now = pd.Timestamp.now(tz="UTC").tz_localize(None)
     checked_at = now.strftime("%Y-%m-%d %H:%M:%S")
 

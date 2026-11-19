@@ -12,8 +12,9 @@ BASE_DIR = Path(__file__).resolve().parents[2]
 
 MODEL_PATH = (
     BASE_DIR
+    / "notebooks"
     / "model"
-    / "visibility_rf_model.pkl"
+    / "visibility_rf_model.joblib"
 )
 
 # ============================================================
@@ -73,123 +74,85 @@ def build_features(
     Mengolah satu data observasi menjadi 13 fitur
     yang dibutuhkan oleh model Random Forest.
     """
+    data = pd.Series(data).copy()
 
-    # Mengubah input menjadi Series
-    data = pd.Series(data)
+    if "data_timestamp" not in data.index or pd.isna(data["data_timestamp"]):
+        raise ValueError("Kolom data_timestamp belum tersedia.")
 
-    # Memeriksa timestamp
-    if "data_timestamp" not in data.index:
-        raise ValueError(
-            "Kolom data_timestamp belum tersedia."
-        )
-
-    timestamp = pd.Timestamp(
-        data["data_timestamp"]
-    )
-
-    # Mengonversi timestamp ke WIB
+    timestamp = pd.Timestamp(data["data_timestamp"])
     if timestamp.tzinfo is None:
-        timestamp = timestamp.tz_localize(
-            input_timezone
-        )
+        timestamp = timestamp.tz_localize(input_timezone)
 
-    datetime_wib = timestamp.tz_convert(
-        "Asia/Jakarta"
-    )
+    datetime_wib = timestamp.tz_convert("Asia/Jakarta")
 
-    # Kolom yang dibutuhkan
-    required_columns = [
+    # Jika tutupan awan total 0 okta (cerah), grup 8 tidak dikirim di SYNOP -> awan rendah = 0
+    if (
+        pd.notna(data.get("cloud_cover_oktas_m"))
+        and int(float(data["cloud_cover_oktas_m"])) == 0
+        and pd.isna(data.get("cloud_low_cover_1"))
+    ):
+        data["cloud_low_cover_1"] = 0
+
+    # Kolom yang wajib terisi penuh
+    strict_required_columns = [
         "wind_speed_ff",
-        "wind_dir_deg_dd",
         "pressure_qff_mb_derived",
         "temp_drybulb_c_tttttt",
         "temp_dewpoint_c_tdtdtd",
         "relative_humidity_pc",
         "cloud_low_cover_1",
         "cloud_cover_oktas_m",
-        "visibility_vv"
+        "visibility_vv",
     ]
 
-    # Memeriksa keberadaan kolom
+    # Kolom yang wajib ada di DataFrame, tapi boleh NaN (misal dd=99 arah angin variabel)
+    all_expected_columns = strict_required_columns + ["wind_dir_deg_dd"]
+
     missing_columns = [
-        col for col in required_columns
-        if col not in data.index
+        col for col in all_expected_columns if col not in data.index
     ]
-
     if missing_columns:
+        raise ValueError(f"Kolom belum tersedia: {missing_columns}")
+
+    if data[strict_required_columns].isna().any():
+        missing_values = (
+            data[strict_required_columns]
+            .index[data[strict_required_columns].isna()]
+            .tolist()
+        )
         raise ValueError(
-            f"Kolom belum tersedia: {missing_columns}"
+            f"Data observasi belum lengkap. Kolom yang kosong: {missing_values}"
         )
 
-    # Memeriksa missing value
-    if data[required_columns].isna().any():
-        missing_values = data[
-            required_columns
-        ].index[
-            data[required_columns].isna()
-        ].tolist()
+    hour = int(datetime_wib.hour)
+    wind_speed = float(data["wind_speed_ff"])
 
-        raise ValueError(
-            "Data observasi belum lengkap. "
-            f"Kolom yang kosong: {missing_values}"
-        )
+    # Jika arah angin kosong (kode SYNOP dd=99 / variabel), beri komponen vektor netral (0.0)
+    if pd.isna(data["wind_dir_deg_dd"]):
+        wind_dir_sin = 0.0
+        wind_dir_cos = 0.0
+    else:
+        wind_dir_rad = np.deg2rad(float(data["wind_dir_deg_dd"]))
+        wind_dir_sin = float(np.sin(wind_dir_rad))
+        wind_dir_cos = float(np.cos(wind_dir_rad))
 
-    # Mengambil jam berdasarkan waktu WIB
-    hour = datetime_wib.hour
-
-    # Feature Engineering
     features = {
-        "wind_speed_ff": data["wind_speed_ff"],
-
-        "wind_dir_sin": np.sin(
-            np.deg2rad(data["wind_dir_deg_dd"])
-        ),
-
-        "wind_dir_cos": np.cos(
-            np.deg2rad(data["wind_dir_deg_dd"])
-        ),
-
-        "is_calm": int(
-            data["wind_speed_ff"] == 0
-        ),
-
-        "pressure_qff_mb_derived":
-            data["pressure_qff_mb_derived"],
-
-        "temp_drybulb_c_tttttt":
-            data["temp_drybulb_c_tttttt"],
-
-        "temp_dewpoint_c_tdtdtd":
-            data["temp_dewpoint_c_tdtdtd"],
-
-        "relative_humidity_pc":
-            data["relative_humidity_pc"],
-
-        "cloud_low_cover_1":
-            data["cloud_low_cover_1"],
-
-        "cloud_cover_oktas_m":
-            data["cloud_cover_oktas_m"],
-
-        "visibility_vv":
-            data["visibility_vv"],
-
-        "hour_sin": np.sin(
-            2 * np.pi * hour / 24
-        ),
-
-        "hour_cos": np.cos(
-            2 * np.pi * hour / 24
-        )
+        "wind_speed_ff": wind_speed,
+        "wind_dir_sin": wind_dir_sin,
+        "wind_dir_cos": wind_dir_cos,
+        "is_calm": int(wind_speed == 0),
+        "pressure_qff_mb_derived": float(data["pressure_qff_mb_derived"]),
+        "temp_drybulb_c_tttttt": float(data["temp_drybulb_c_tttttt"]),
+        "temp_dewpoint_c_tdtdtd": float(data["temp_dewpoint_c_tdtdtd"]),
+        "relative_humidity_pc": float(data["relative_humidity_pc"]),
+        "cloud_low_cover_1": float(data["cloud_low_cover_1"]),
+        "cloud_cover_oktas_m": float(data["cloud_cover_oktas_m"]),
+        "visibility_vv": float(data["visibility_vv"]),
+        "hour_sin": float(np.sin(2 * np.pi * hour / 24)),
+        "hour_cos": float(np.cos(2 * np.pi * hour / 24)),
     }
 
-    # Menyesuaikan urutan fitur dengan model
-    features_df = pd.DataFrame(
-        [features],
-        columns=selected_features
-    )
-
-    return features_df
+    return pd.DataFrame([features], columns=selected_features)
 
 # ============================================================
 # 4. PREDIKSI FENOMENA VISIBILITY
