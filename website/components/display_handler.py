@@ -254,12 +254,12 @@ def _display_meteorological_parameters(selected_data):
             with c1:
                 st.metric(
                     "Awan Rendah",
-                    format_oktas(selected_data.get("cloud_low_cover_1"))
+                    format_oktas(selected_data.get("cloud_low_cover_oktas"))
                 )
             with c2:
                 st.metric(
-                    "Awan Total",
-                    format_oktas(selected_data.get("cloud_cover_oktas_m"))
+                    "Awan Menengah",
+                    format_oktas(selected_data.get("cloud_med_cover_oktas"))
                 )
 
 def _build_timeline(phenomenon_df, selected_tz):

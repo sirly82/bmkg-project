@@ -26,8 +26,8 @@ CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
     temp_drybulb_c_tttttt REAL,
     temp_dewpoint_c_tdtdtd REAL,
     relative_humidity_pc INTEGER,
-    cloud_low_cover_1 INTEGER,
-    cloud_cover_oktas_m INTEGER,
+    cloud_low_cover_oktas INTEGER,
+    cloud_med_cover_oktas INTEGER,
     rainfall_24h_rrrr REAL,
     rainfall_mm REAL,
     rainfall_period_h INTEGER,
@@ -57,8 +57,8 @@ COLUMNS = [
     "temp_drybulb_c_tttttt",
     "temp_dewpoint_c_tdtdtd",
     "relative_humidity_pc",
-    "cloud_low_cover_1",
-    "cloud_cover_oktas_m",
+    "cloud_low_cover_oktas",
+    "cloud_med_cover_oktas",
     "rainfall_24h_rrrr",
     "rainfall_mm",
     "rainfall_period_h",
@@ -81,10 +81,29 @@ def get_connection():
 
     return conn
 
+def migrate_db(conn):
+    cols = {r[1] for r in conn.execute(f"PRAGMA table_info({TABLE_NAME})")}
+    changed = False
+
+    if "cloud_low_cover_1" in cols and "cloud_low_cover_oktas" not in cols:
+        conn.execute(
+            f"ALTER TABLE {TABLE_NAME} "
+            "RENAME COLUMN cloud_low_cover_1 TO cloud_low_cover_oktas"
+        )
+        changed = True
+    if "cloud_med_cover_oktas" not in cols:
+        conn.execute(f"ALTER TABLE {TABLE_NAME} ADD COLUMN cloud_med_cover_oktas INTEGER")
+        changed = True
+        
+    if changed:
+        # data lama belum punya kolom baru -> paksa scrape ulang
+        conn.execute("DELETE FROM synop_hour_cache")
+
 def init_db():
     with get_connection() as conn:
         conn.execute(CREATE_TABLE_SQL)
         conn.execute(CREATE_CACHE_SQL)
+        migrate_db(conn)
 
 # ============================================================
 # MENYIMPAN DATA

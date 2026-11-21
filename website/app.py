@@ -57,7 +57,7 @@ st.markdown(
         <div class="chips">
             <span class="chip">Data SYNOP</span>
             <span class="chip">Riwayat 24 jam</span>
-            <span class="chip">Random Forest</span>
+            <span class="chip">LightGBM</span>
         </div>
     </div>
     """,

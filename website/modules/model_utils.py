@@ -13,7 +13,7 @@ BASE_DIR = Path(__file__).resolve().parents[2]
 MODEL_PATH = (
     BASE_DIR
     / "model"
-    / "weather_phenomena_rf_model.joblib"
+    / "weather_phenomena_lgbm_model.joblib"
 )
 
 # ============================================================
@@ -64,99 +64,163 @@ def load_model():
 # ============================================================
 # 3. FEATURE ENGINEERING
 # ============================================================
-def build_features(
-    data,
-    selected_features,
-    input_timezone="UTC"
-):
+RAW_COLS = [
+    "wind_speed_ff",
+    "wind_dir_deg_dd",
+    "pressure_qff_mb_derived",
+    "temp_drybulb_c_tttttt",
+    "temp_dewpoint_c_tdtdtd",
+    "relative_humidity_pc",
+    "cloud_low_cover_oktas",
+    "cloud_med_cover_oktas",
+    "visibility_vv",
+]
+
+CLOUD_COLS = ["cloud_low_cover_oktas", "cloud_med_cover_oktas"]
+
+SENSOR_COLS = [
+    "wind_speed_ff",
+    "pressure_qff_mb_derived",
+    "temp_drybulb_c_tttttt",
+    "temp_dewpoint_c_tdtdtd",
+    "relative_humidity_pc",
+    "visibility_vv",
+]
+
+IMPUTE_VALUES = {
+    "cloud_low_cover_oktas": 3.0,
+    "cloud_med_cover_oktas": 5.0,
+}
+
+LAG_BASE_COLS = [
+    "wind_dir_sin",
+    "wind_dir_cos",
+    "wind_speed_ff",
+    "visibility_vv",
+    "pressure_qff_mb_derived",
+    "temp_drybulb_c_tttttt",
+    "temp_dewpoint_c_tdtdtd",
+    "relative_humidity_pc",
+    "cloud_low_cover_oktas",
+    "cloud_med_cover_oktas",
+]
+
+DIFF_COLS = {
+    "visibility_diff": "visibility_vv",
+    "temp_drybulb_diff": "temp_drybulb_c_tttttt",
+    "rh_diff": "relative_humidity_pc",
+    "pressure_diff": "pressure_qff_mb_derived",
+    "wind_speed_diff": "wind_speed_ff",
+}
+
+def build_feature_table(history):
     """
-    Mengolah satu data observasi menjadi 13 fitur
-    yang dibutuhkan oleh model Random Forest.
+    Membuat semua kandidat fitur untuk setiap jam pada riwayat observasi.
+    history: DataFrame hasil get_hours_data (data_timestamp = UTC naive).
+    Jam yang tidak ada laporannya tetap muncul sebagai baris NaN,
+    sehingga lag tidak bergeser ke jam yang salah.
     """
-    data = pd.Series(data).copy()
+    df = history.copy()
+    df["data_timestamp"] = pd.to_datetime(df["data_timestamp"])
+    df = (
+        df.drop_duplicates("data_timestamp")
+        .set_index("data_timestamp")
+        .sort_index()
+    )
 
-    if "data_timestamp" not in data.index or pd.isna(data["data_timestamp"]):
-        raise ValueError("Kolom data_timestamp belum tersedia.")
+    full_index = pd.date_range(df.index.min(), df.index.max(), freq="h")
+    df = df.reindex(full_index)
 
-    timestamp = pd.Timestamp(data["data_timestamp"])
-    if timestamp.tzinfo is None:
-        timestamp = timestamp.tz_localize(input_timezone)
+    num = pd.DataFrame(index=df.index)
+    for col in RAW_COLS:
+        if col not in df.columns:
+            raise ValueError(f"Kolom belum tersedia: {col}")
+        num[col] = pd.to_numeric(df[col], errors="coerce").astype("float64")
 
-    datetime_wib = timestamp.tz_convert("Asia/Jakarta")
+    # Catat laporan asli SEBELUM interpolasi
+    has_report = num["wind_speed_ff"].notna()
+    observed_ok = num[SENSOR_COLS].notna().all(axis=1)
 
-    # Jika tutupan awan total 0 okta (cerah), grup 8 tidak dikirim di SYNOP -> awan rendah = 0
-    if (
-        pd.notna(data.get("cloud_cover_oktas_m"))
-        and int(float(data["cloud_cover_oktas_m"])) == 0
-        and pd.isna(data.get("cloud_low_cover_1"))
-    ):
-        data["cloud_low_cover_1"] = 0
+    # Celah pendek (maks 2 jam, di antara dua jam yang ada datanya)
+    num[SENSOR_COLS] = num[SENSOR_COLS].interpolate(limit=3, limit_area="inside")
 
-    # Kolom yang wajib terisi penuh
-    strict_required_columns = [
-        "wind_speed_ff",
-        "pressure_qff_mb_derived",
-        "temp_drybulb_c_tttttt",
-        "temp_dewpoint_c_tdtdtd",
-        "relative_humidity_pc",
-        "cloud_low_cover_1",
-        "cloud_cover_oktas_m",
-        "visibility_vv",
-    ]
+    # Imputasi awan: ffill dulu, sisanya median data training
+    for col in CLOUD_COLS:
+        num[col] = num[col].ffill(limit=3).fillna(IMPUTE_VALUES[col])
 
-    # Kolom yang wajib ada di DataFrame, tapi boleh NaN (misal dd=99 arah angin variabel)
-    all_expected_columns = strict_required_columns + ["wind_dir_deg_dd"]
+    feats = num.copy()
+    feats["observed_ok"] = observed_ok
 
-    missing_columns = [
-        col for col in all_expected_columns if col not in data.index
-    ]
-    if missing_columns:
-        raise ValueError(f"Kolom belum tersedia: {missing_columns}")
+    # Arah angin: 0.0 hanya jika laporan ada tapi arah variabel (dd=99)
+    rad = np.deg2rad(num["wind_dir_deg_dd"])
+    variable = rad.isna() & has_report
+    feats["wind_dir_sin"] = np.sin(rad).mask(variable, 0.0)
+    feats["wind_dir_cos"] = np.cos(rad).mask(variable, 0.0)
+    feats[["wind_dir_sin", "wind_dir_cos"]] = feats[
+        ["wind_dir_sin", "wind_dir_cos"]
+    ].interpolate(limit=3, limit_area="inside")
 
-    if data[strict_required_columns].isna().any():
-        missing_values = (
-            data[strict_required_columns]
-            .index[data[strict_required_columns].isna()]
-            .tolist()
-        )
-        raise ValueError(
-            f"Data observasi belum lengkap. Kolom yang kosong: {missing_values}"
-        )
+    feats["is_calm"] = (num["wind_speed_ff"] == 0).astype(int)
 
-    hour = int(datetime_wib.hour)
-    wind_speed = float(data["wind_speed_ff"])
+    # Jam lokal (WIB)
+    hour = (
+        feats.index.tz_localize("UTC").tz_convert("Asia/Jakarta").hour.to_numpy()
+    )
+    feats["hour_sin"] = np.sin(2 * np.pi * hour / 24)
+    feats["hour_cos"] = np.cos(2 * np.pi * hour / 24)
 
-    # Jika arah angin kosong (kode SYNOP dd=99 / variabel), beri komponen vektor netral (0.0)
-    if pd.isna(data["wind_dir_deg_dd"]):
-        wind_dir_sin = 0.0
-        wind_dir_cos = 0.0
+    # Lag 1-3 jam
+    for col in LAG_BASE_COLS:
+        for k in (1, 2, 3):
+            feats[f"{col}_lag{k}"] = feats[col].shift(k)
+
+    # Selisih terhadap 1 dan 3 jam sebelumnya
+    for name, col in DIFF_COLS.items():
+        for n in (1, 3):
+            feats[f"{name}_{n}"] = feats[col] - feats[col].shift(n)
+
+    return feats
+
+def build_features(history, selected_features, target_timestamp=None):
+    """
+    Mengambil fitur untuk satu jam (default: jam terakhir pada history).
+    """
+    table = build_feature_table(history)
+
+    if target_timestamp is None:
+        target = table.index[-1]
     else:
-        wind_dir_rad = np.deg2rad(float(data["wind_dir_deg_dd"]))
-        wind_dir_sin = float(np.sin(wind_dir_rad))
-        wind_dir_cos = float(np.cos(wind_dir_rad))
+        target = pd.Timestamp(target_timestamp)
+        if target.tzinfo is not None:
+            target = target.tz_convert("UTC").tz_localize(None)
 
-    features = {
-        "wind_speed_ff": wind_speed,
-        "wind_dir_sin": wind_dir_sin,
-        "wind_dir_cos": wind_dir_cos,
-        "is_calm": int(wind_speed == 0),
-        "pressure_qff_mb_derived": float(data["pressure_qff_mb_derived"]),
-        "temp_drybulb_c_tttttt": float(data["temp_drybulb_c_tttttt"]),
-        "temp_dewpoint_c_tdtdtd": float(data["temp_dewpoint_c_tdtdtd"]),
-        "relative_humidity_pc": float(data["relative_humidity_pc"]),
-        "cloud_low_cover_1": float(data["cloud_low_cover_1"]),
-        "cloud_cover_oktas_m": float(data["cloud_cover_oktas_m"]),
-        "visibility_vv": float(data["visibility_vv"]),
-        "hour_sin": float(np.sin(2 * np.pi * hour / 24)),
-        "hour_cos": float(np.cos(2 * np.pi * hour / 24)),
-    }
+    if target not in table.index:
+        raise ValueError(f"Jam {target} tidak ada pada riwayat observasi.")
 
-    return pd.DataFrame([features], columns=selected_features)
+    if not bool(table.loc[target, "observed_ok"]):
+        raise ValueError(
+            f"Laporan jam {target} (UTC) tidak lengkap, prediksi tidak dilakukan."
+        )
+
+    unknown = [f for f in selected_features if f not in table.columns]
+    if unknown:
+        raise ValueError(f"Fitur model tidak tersedia: {unknown}")
+
+    row = table.loc[[target], list(selected_features)]
+
+    empty = row.columns[row.isna().any()].tolist()
+    if empty:
+        raise ValueError(
+            f"Observasi atau riwayat jam sebelumnya belum lengkap. "
+            f"Fitur kosong: {empty}"
+        )
+
+    return row
 
 # ============================================================
 # 4. PREDIKSI FENOMENA VISIBILITY
 # ============================================================
-def predict_phenomenon(data):
+def predict_phenomenon(history, target_timestamp=None):
     """
     Melakukan prediksi fenomena berdasarkan
     satu data observasi SYNOP.
@@ -176,10 +240,10 @@ def predict_phenomenon(data):
 
     # Membuat fitur
     features_df = build_features(
-        data=data,
-        selected_features=selected_features,
-        input_timezone="UTC"
-    )
+            history=history,
+            selected_features=selected_features,
+            target_timestamp=target_timestamp,
+        )
 
     # Melakukan prediksi
     prediction = model.predict(features_df)[0]

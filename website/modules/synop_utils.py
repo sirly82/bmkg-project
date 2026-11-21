@@ -25,8 +25,8 @@ INT_COLS = [
     "wind_dir_deg_dd",
     "wind_speed_ff",
     "relative_humidity_pc",
-    "cloud_low_cover_1",
-    "cloud_cover_oktas_m",
+    "cloud_low_cover_oktas",
+    "cloud_med_cover_oktas",
     "rainfall_period_h",
 ]
 
@@ -98,6 +98,59 @@ def decode_visibility_km(vv_str):
         }
         return table_90.get(vv)
     return None
+
+
+def decode_low_med_cloud_oktas(tokens, start, total_oktas):
+    """
+    Mengembalikan (low_oktas, med_oktas) dari grup 8NhCLCMCH (seksi 1),
+    dengan fallback lapisan awan 8NsChshs (seksi 333) untuk awan menengah.
+    """
+    low = med = None
+
+    for tok in tokens[start:]:
+        if tok in ("333", "444", "555"):
+            break
+        if len(tok) != 5 or not tok.startswith("8"):
+            continue
+
+        nh, cl, cm = tok[1], tok[2], tok[3]
+        nh_val = int(nh) if nh.isdigit() else None
+        if nh_val == 9:          # langit tertutup/obscured -> 8 okta
+            nh_val = 8
+
+        if cl == "0":            # tidak ada awan rendah
+            low = 0
+            if cm == "0":
+                med = 0
+            elif cm.isdigit():
+                med = nh_val     # Nh = jumlah awan menengah
+        elif cl.isdigit():
+            low = nh_val
+            if cm == "0":
+                med = 0
+            elif cm.isdigit():   # ada awan menengah, ambil dari lapisan
+                layers = []
+                in_333 = False
+                for t in tokens[start:]:
+                    if t == "333":
+                        in_333 = True
+                        continue
+                    if t in ("444", "555"):
+                        break
+                    if (
+                        in_333 and len(t) == 5 and t[0] == "8"
+                        and t[1].isdigit() and t[2].isdigit()
+                        and t[2] in "345"     # Ac, As, Ns
+                    ):
+                        layers.append(min(int(t[1]), 8))
+                med = max(layers) if layers else None
+        break
+
+    # Langit cerah: grup 8 tidak dikirim
+    if low is None and med is None and total_oktas == 0:
+        low, med = 0, 0
+
+    return low, med
 
 # ============================================================
 # 4. KLASIFIKASI FENOMENA BERDASARKAN WW
@@ -223,23 +276,10 @@ def parse_synop_row(row):
     )
 
     temp_c = dewpoint_c = stn_press = mslp = ww_code = None
-    cloud_low_1 = None
 
-    for tok in tokens[cursor:]:
-        if tok in ("333", "444", "555"):
-            break
-
-        if len(tok) == 5 and tok.startswith("8"):
-            nh = tok[1]
-            cl = tok[2]
-
-            if cl == "0":
-                cloud_low_1 = 0
-            elif cl.isdigit() and nh.isdigit():
-                cloud_low_1 = int(nh)
-            else:
-                cloud_low_1 = None
-            break
+    cloud_low_oktas, cloud_med_oktas = decode_low_med_cloud_oktas(
+        tokens, cursor, cloud_oktas
+    )
 
     rain_mm = 0.0 if ir_flag == "3" else None
     rain_period_h = None
@@ -325,8 +365,8 @@ def parse_synop_row(row):
         "temp_drybulb_c_tttttt": temp_c,
         "temp_dewpoint_c_tdtdtd": dewpoint_c,
         "relative_humidity_pc": rh_int,
-        "cloud_low_cover_1": cloud_low_1,
-        "cloud_cover_oktas_m": cloud_oktas,
+        "cloud_low_cover_oktas": cloud_low_oktas,
+        "cloud_med_cover_oktas": cloud_med_oktas,
         "rainfall_24h_rrrr": rain_24h,
         "rainfall_mm": rain_mm,
         "rainfall_period_h": rain_period_h,
@@ -443,7 +483,8 @@ def scrape_synop_range(
     )
 
     for col in INT_COLS:
-        df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
 
     start = pd.Timestamp(start_datetime)
     end = pd.Timestamp(end_datetime)
