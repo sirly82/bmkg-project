@@ -9,7 +9,7 @@ import pandas as pd
 from html.parser import HTMLParser
 
 # ============================================================
-# 1. KONFIGURASI OGIMET
+# 1. KONFIGURASI OGIMET & KELAS FENOMENA
 # ============================================================
 STATION_ID = "96195"
 OGIMET_URL = "https://www.ogimet.com/display_synops2.php"
@@ -29,6 +29,15 @@ INT_COLS = [
     "cloud_med_cover_oktas",
     "rainfall_period_h",
 ]
+PHENOMENON_CLASSES = (
+    "Normal",
+    "Haze/Smoke/Dust",
+    "Mist",
+    "Fog",
+    "Active Precipitation",
+    "Recent/Distant Precipitation",
+    "Other",
+)
 
 # ============================================================
 # 2. HTML TABLE PARSER
@@ -67,7 +76,7 @@ class OgimetTableParser(HTMLParser):
             self.current_cell.append(data)
 
 # ============================================================
-# 3. DECODING VISIBILITY
+# 3. DECODING VISIBILITY & AWAN
 # ============================================================
 def decode_visibility_km(vv_str):
     if not vv_str.isdigit():
@@ -99,7 +108,6 @@ def decode_visibility_km(vv_str):
         return table_90.get(vv)
     return None
 
-
 def decode_low_med_cloud_oktas(tokens, start, total_oktas):
     """
     Mengembalikan (low_oktas, med_oktas) dari grup 8NhCLCMCH (seksi 1),
@@ -115,20 +123,20 @@ def decode_low_med_cloud_oktas(tokens, start, total_oktas):
 
         nh, cl, cm = tok[1], tok[2], tok[3]
         nh_val = int(nh) if nh.isdigit() else None
-        if nh_val == 9:          # langit tertutup/obscured -> 8 okta
+        if nh_val == 9:  # langit tertutup/obscured -> 8 okta
             nh_val = 8
 
-        if cl == "0":            # tidak ada awan rendah
+        if cl == "0":  # tidak ada awan rendah
             low = 0
             if cm == "0":
                 med = 0
             elif cm.isdigit():
-                med = nh_val     # Nh = jumlah awan menengah
+                med = nh_val  # Nh = jumlah awan menengah
         elif cl.isdigit():
             low = nh_val
             if cm == "0":
                 med = 0
-            elif cm.isdigit():   # ada awan menengah, ambil dari lapisan
+            elif cm.isdigit():  # ada awan menengah, ambil dari lapisan
                 layers = []
                 in_333 = False
                 for t in tokens[start:]:
@@ -138,9 +146,12 @@ def decode_low_med_cloud_oktas(tokens, start, total_oktas):
                     if t in ("444", "555"):
                         break
                     if (
-                        in_333 and len(t) == 5 and t[0] == "8"
-                        and t[1].isdigit() and t[2].isdigit()
-                        and t[2] in "345"     # Ac, As, Ns
+                        in_333
+                        and len(t) == 5
+                        and t[0] == "8"
+                        and t[1].isdigit()
+                        and t[2].isdigit()
+                        and t[2] in "345"  # Ac, As, Ns
                     ):
                         layers.append(min(int(t[1]), 8))
                 med = max(layers) if layers else None
@@ -247,14 +258,18 @@ def parse_synop_row(row):
         else None
     )
 
-    if grp_wind[1:3] == "99":
+    if len(grp_wind) >= 3 and grp_wind[1:3] == "99":
         wind_dir = None
-    elif grp_wind[1:3].isdigit():
+    elif len(grp_wind) >= 3 and grp_wind[1:3].isdigit():
         wind_dir = int(grp_wind[1:3]) * 10
     else:
         wind_dir = None
 
-    wind_raw = int(grp_wind[3:5]) if grp_wind[3:5].isdigit() else None
+    wind_raw = (
+        int(grp_wind[3:5])
+        if len(grp_wind) == 5 and grp_wind[3:5].isdigit()
+        else None
+    )
     cursor = 5
 
     if (
@@ -346,7 +361,6 @@ def parse_synop_row(row):
 
     # Perhitungan kelembapan relatif
     rh_int = None
-
     if temp_c is not None and dewpoint_c is not None:
         es = math.exp((17.625 * temp_c) / (243.04 + temp_c))
         e = math.exp((17.625 * dewpoint_c) / (243.04 + dewpoint_c))
@@ -460,6 +474,9 @@ def scrape_synop_range(
 
             if records:
                 break
+
+            if "quota" in html_text.lower() or "limit" in html_text.lower():
+                print(f"Ogimet rate limit (percobaan {attempt}), menunggu retry...")
         except Exception as e:
             print(f"Gagal mengambil data (percobaan {attempt}): {e}")
 
@@ -502,26 +519,31 @@ def scrape_synop_range(
     return df
 
 # ============================================================
-# 9. HELPER UNTUK ENDPOINT WEBSITE (24 JAM KE BELAKANG)
+# 9. HELPER RENTANG 6 JAM (t-4 s.d. t+1) UNTUK WEBSITE
 # ============================================================
-def get_synop_last_24h(target_datetime, hours_back=24, local_tz="Asia/Jakarta"):
+def get_synop_window(
+    target_datetime,
+    hours_before=23,
+    hours_after=1,
+    local_tz="Asia/Jakarta",
+):
     """
-    Mengambil data SYNOP dari (target_datetime - hours_back) hingga target_datetime.
-    Input target_datetime diasumsikan waktu lokal (default WIB) jika tidak punya timezone.
-    Mengembalikan DataFrame terurut dari yang paling lama ke terbaru.
+    Mengambil data SYNOP pada rentang [target - hours_before, target + hours_after].
+    Default: 4 jam sebelum t, jam t, dan 1 jam setelah t (total 6 jam).
+    Input target_datetime diasumsikan waktu lokal (default WIB) jika naive.
     """
-    end_local = pd.Timestamp(target_datetime)
-    if end_local.tzinfo is None:
-        end_local = end_local.tz_localize(local_tz)
+    target_local = pd.Timestamp(target_datetime)
+    if target_local.tzinfo is None:
+        target_local = target_local.tz_localize(local_tz)
 
-    end_utc = end_local.tz_convert("UTC").tz_localize(None)
-    start_utc = end_utc - pd.Timedelta(hours=hours_back)
+    target_utc = target_local.tz_convert("UTC").floor("h").tz_localize(None)
+    start_utc = target_utc - pd.Timedelta(hours=hours_before)
+    end_utc = target_utc + pd.Timedelta(hours=hours_after)
 
     df = scrape_synop_range(start_utc, end_utc)
     if df.empty:
         return df
 
-    # Tambahkan kolom waktu lokal (WIB) agar mudah ditampilkan di frontend/grafik
     df["timestamp_local"] = (
         df["data_timestamp"]
         .dt.tz_localize("UTC")
@@ -530,3 +552,12 @@ def get_synop_last_24h(target_datetime, hours_back=24, local_tz="Asia/Jakarta"):
     )
 
     return df
+
+def get_synop_last_24h(target_datetime, hours_back=24, local_tz="Asia/Jakarta"):
+    """Wrapper kompatibilitas untuk pengambilan data ke belakang."""
+    return get_synop_window(
+        target_datetime=target_datetime,
+        hours_before=hours_back,
+        hours_after=0,
+        local_tz=local_tz,
+    )

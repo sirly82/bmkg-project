@@ -6,8 +6,12 @@ sys.path.insert(0, str(PROJECT_DIR))
 
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+import pandas as pd
+
 from modules.synop_utils import (
+    PHENOMENON_CLASSES,
     classify_phenomenon,
+    get_synop_window,
     parse_synop_row,
     scrape_synop_range,
 )
@@ -35,7 +39,6 @@ df = scrape_synop_range(
 # 3. PERIKSA HASIL
 # ==================================================
 if df.empty:
-
     print("\nTidak ada data yang berhasil diperoleh.")
 else:
     print("\nData hasil scraping:")
@@ -139,4 +142,30 @@ assert classify_phenomenon("100") == "Unknown"
 assert classify_phenomenon("1.5") == "Unknown"
 assert classify_phenomenon("abc") == "Unknown"
 
-print("\nSemua pengujian SYNOP, decoding awan, dan klasifikasi WW berhasil.")
+# ==================================================
+# 7. UJI HELPER WINDOW 24 JAM + 1 JAM (t-23 s.d. t+1)
+# ==================================================
+assert len(PHENOMENON_CLASSES) == 7, "Jumlah PHENOMENON_CLASSES harus 7!"
+assert "Unknown" not in PHENOMENON_CLASSES, "Unknown tidak boleh masuk kelas model!"
+
+df_win = get_synop_window(
+    target_datetime=selected_time,
+    hours_before=23,
+    hours_after=1,
+    local_tz="Asia/Jakarta",
+)
+
+assert not df_win.empty, "get_synop_window mengembalikan DataFrame kosong!"
+assert "timestamp_local" in df_win.columns, "Kolom timestamp_local tidak terbentuk!"
+assert df_win["timestamp_local"].is_monotonic_increasing, "timestamp_local tidak urut!"
+
+target_naive_wib = pd.Timestamp(selected_time.replace(tzinfo=None))
+expected_start_wib = target_naive_wib - pd.Timedelta(hours=23)
+expected_end_wib = target_naive_wib + pd.Timedelta(hours=1)
+
+assert df_win["timestamp_local"].min() >= expected_start_wib
+assert df_win["timestamp_local"].max() <= expected_end_wib
+
+print("\nRentang get_synop_window (WIB):",
+      df_win["timestamp_local"].min(), "s.d.", df_win["timestamp_local"].max())
+print("Semua pengujian SYNOP, decoding awan, klasifikasi WW, dan window berhasil.")

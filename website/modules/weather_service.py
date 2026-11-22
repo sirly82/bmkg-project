@@ -9,33 +9,71 @@ from modules.database import (
 )
 from modules.synop_utils import scrape_synop_range
 
+
+def get_window_bounds(
+    selected_datetime,
+    selected_timezone="Asia/Jakarta",
+    display_hours=24,
+    lag_buffer_hours=3,
+    forecast_horizon_hours=1,
+):
+    """
+    Menghitung batas waktu (UTC naive) untuk:
+    - fetch_start_utc   : t - (display_hours - 1) - lag_buffer_hours (default: t - 26 jam)
+    - display_start_utc : t - (display_hours - 1) (default: t - 23 jam)
+    - target_utc        : waktu observasi terpilih (t)
+    - forecast_utc      : t + forecast_horizon_hours (default: t + 1 jam)
+    """
+    selected_time = pd.Timestamp(selected_datetime)
+    if selected_time.tzinfo is None:
+        selected_time = selected_time.tz_localize(selected_timezone)
+
+    target_utc = selected_time.tz_convert("UTC").floor("h").tz_localize(None)
+    display_start_utc = target_utc - pd.Timedelta(hours=display_hours - 1)
+    fetch_start_utc = display_start_utc - pd.Timedelta(hours=lag_buffer_hours)
+    forecast_utc = target_utc + pd.Timedelta(hours=forecast_horizon_hours)
+
+    return {
+        "target_utc": target_utc,
+        "display_start_utc": display_start_utc,
+        "fetch_start_utc": fetch_start_utc,
+        "forecast_utc": forecast_utc,
+    }
+
+
 def get_hours_data(
     selected_datetime,
     selected_timezone="Asia/Jakarta",
     force_refresh=False,
+    display_hours=24,
+    lag_buffer_hours=3,
+    forecast_horizon_hours=1,
 ):
     """
-    Mengambil data observasi SYNOP selama 24 jam
-    yang berakhir pada waktu pilihan pengguna.
+    Mengambil data observasi SYNOP dari (t - 26 jam) hingga (t + 1 jam):
+    - 3 jam buffer sebelum rentang 24 jam agar lag1..lag3 lengkap sejak jam pertama tampilan
+    - 24 jam utama (t - 23 s.d. t) untuk klasifikasi & grafik monitoring
+    - 1 jam setelah t (t + 1) untuk pembanding aktual terhadap hasil prediksi (jika tersedia)
     """
     # --------------------------------------------------------
-    # 1. Konversi waktu pilihan ke UTC
+    # 1. Hitung batas waktu dalam UTC (naive)
     # --------------------------------------------------------
-    selected_time = pd.Timestamp(selected_datetime)
+    bounds = get_window_bounds(
+        selected_datetime=selected_datetime,
+        selected_timezone=selected_timezone,
+        display_hours=display_hours,
+        lag_buffer_hours=lag_buffer_hours,
+        forecast_horizon_hours=forecast_horizon_hours,
+    )
+    start_utc = bounds["fetch_start_utc"]
+    end_utc = bounds["forecast_utc"]
 
-    if selected_time.tzinfo is None:
-        selected_time = selected_time.tz_localize(selected_timezone)
-
-    end_utc = selected_time.tz_convert("UTC").floor("h")
-    start_utc = end_utc - pd.Timedelta(hours=23)
-
-    # 24 timestamp yang dibutuhkan (naive UTC)
     required_hours = list(
         pd.date_range(
             start=start_utc,
             end=end_utc,
             freq="h",
-        ).tz_localize(None)
+        )
     )
 
     # --------------------------------------------------------
@@ -44,23 +82,24 @@ def get_hours_data(
     init_db()
 
     # --------------------------------------------------------
-    # 3. Periksa jam yang sudah pernah diperiksa
+    # 3. Periksa jam yang perlu diambil dari Ogimet
     # --------------------------------------------------------
+    now_utc = pd.Timestamp.now(tz="UTC").floor("h").tz_localize(None)
+
     if force_refresh:
-        unchecked_hours = required_hours
+        unchecked_hours = [h for h in required_hours if h <= now_utc]
     else:
         checked_hours = get_checked_hours(start_utc, end_utc)
         unchecked_hours = [
             hour
             for hour in required_hours
-            if hour not in checked_hours
+            if (hour not in checked_hours) and (hour <= now_utc)
         ]
 
     # --------------------------------------------------------
     # 4. Kelompokkan jam yang berurutan
     # --------------------------------------------------------
     groups = []
-
     for hour in unchecked_hours:
         if not groups:
             groups.append([hour])
@@ -69,8 +108,7 @@ def get_hours_data(
         else:
             groups.append([hour])
 
-    # Batas waktu aman untuk menandai jam kosong sebagai "permanen kosong"
-    # (beri jeda 2 jam dari waktu sekarang agar laporan yang telat masuk tetap bisa diambil ulang)
+    # Jeda aman 2 jam agar laporan yang terlambat rilis tetap bisa diambil ulang
     safe_cache_cutoff = (
         pd.Timestamp.now(tz="UTC").tz_localize(None)
         - pd.Timedelta(hours=2)
@@ -102,7 +140,6 @@ def get_hours_data(
                 pd.to_datetime(df_new["data_timestamp"]).dt.floor("h")
             )
 
-        # Tandai jam yang datanya ditemukan, ATAU jam yang sudah cukup lampau
         hours_to_mark = [
             h
             for h in group
@@ -143,9 +180,10 @@ def get_hours_data(
     # --------------------------------------------------------
     # 8. Informasi hasil
     # --------------------------------------------------------
-    print("\nPemeriksaan 24 jam selesai.")
-    print("Jumlah jam yang dibutuhkan :", len(required_hours))
-    print("Jumlah laporan tersedia   :", len(df_result))
-    print("Jumlah jam tanpa laporan  :", len(missing_reports))
+    print("\nPemeriksaan window observasi selesai.")
+    print("Rentang UTC                :", start_utc, "s.d.", end_utc)
+    print("Jumlah jam dalam window    :", len(required_hours))
+    print("Jumlah laporan tersedia    :", len(df_result))
+    print("Jumlah jam tanpa laporan   :", len(missing_reports))
 
     return df_result
